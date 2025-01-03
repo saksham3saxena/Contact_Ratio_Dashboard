@@ -1,151 +1,98 @@
 import streamlit as st
 import pandas as pd
-import math
+import numpy as np
 from pathlib import Path
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
-
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
-
+# --------------------------------------------------------------------
+# 1. LOAD THE CSV DATA
+# --------------------------------------------------------------------
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def load_data():
+    # Path to your CSV file
+    DATA_FILENAME = Path(__file__).parent / "data/summary_data.csv"
+    df = pd.read_csv(DATA_FILENAME)
+    
+    # Parse the session_date column as datetime, if needed
+    df['session_date'] = pd.to_datetime(df['session_date'], errors='coerce')
+    
+    # Convert numeric columns from string to numeric if necessary
+    # (This is only needed if the CSV has them as strings)
+    df['CreatedMonth'] = pd.to_numeric(df['CreatedMonth'], errors='coerce',downcast="signed")
+    df['CreatedWeek'] = pd.to_numeric(df['CreatedWeek'], errors='coerce',downcast="signed")
+    #df['CreatedWeek'] = df['CreatedWeek'].astype(str)
+    df['Sum_session_count'] = pd.to_numeric(df['Sum_session_count'], errors='coerce')
+    df['Avg_week_txn_counts'] = pd.to_numeric(df['Avg_week_txn_counts'], errors='coerce')
+    
+    return df
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# --------------------------------------------------------------------
+# 2. SETUP STREAMLIT APP
+# --------------------------------------------------------------------
+st.set_page_config(page_title="Week-wise Contact Ratio", layout="wide")
+df = load_data()
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+st.title("Week-wise Contact Ratio Dashboard")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+st.markdown("""
+Use this dashboard to see how contact ratio changes from **week to week**.
+The formula is:
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+\\[
+\\text{Contact Ratio} = 1{,}000{,}000 \\times \\frac{\\text{Sum\\_session\\_count}}{\\text{Avg\\_week\\_txn\\_counts}}
+\\]
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+Below, choose the minimum and maximum week numbers you'd like to analyze.
+""")
 
-    return gdp_df
+# --------------------------------------------------------------------
+# 3. USER INPUT: WEEK RANGE
+# --------------------------------------------------------------------
+min_week_in_data = int(df['CreatedWeek'].min())
+max_week_in_data = int(df['CreatedWeek'].max())
 
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+min_week, max_week = st.slider(
+    "Select CreatedWeek range:",
+    min_value=min_week_in_data,
+    max_value=max_week_in_data,
+    value=(min_week_in_data, max_week_in_data)
 )
 
-''
-''
+# Filter data by the selected week range
+filtered_df = df[(df['CreatedWeek'] >= min_week) & (df['CreatedWeek'] <= max_week)].copy()
 
+# --------------------------------------------------------------------
+# 4. CALCULATE CONTACT RATIO
+# --------------------------------------------------------------------
+# For each row: contact_ratio = 1,000,000 * Sum_session_count / Avg_week_txn_counts
+filtered_df['contact_ratio'] = 1_000_000 * (
+    filtered_df['Sum_session_count'] / filtered_df['Avg_week_txn_counts']
+)
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+st.subheader("Filtered Results")
+st.write("The table below shows rows that fall within the chosen week range, along with the computed contact ratio:")
 
-st.header(f'GDP in {to_year}', divider='gray')
+# Show the results in a table
+st.dataframe(filtered_df)
 
-''
+# --------------------------------------------------------------------
+# 5. PLOT A CHART OF CONTACT RATIO BY WEEK
+# --------------------------------------------------------------------
+st.subheader("Contact Ratio by CreatedWeek")
 
-cols = st.columns(4)
+# Sort by CreatedWeek so the chart is in ascending order
+filtered_df.sort_values(by='CreatedWeek', inplace=True)
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+# Plot a line chart
+st.line_chart(
+    data=filtered_df,
+    x='CreatedWeek',
+    y='contact_ratio',
+    height=400
+)
 
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+st.markdown("""
+**Interpretation:**
+- The x-axis represents the `CreatedWeek`.
+- The y-axis (contact ratio) is scaled by 1,000,000 to avoid small fractional values.
+- This chart helps you visualize how contact ratio changes from one week to another within your selected range.
+""")
